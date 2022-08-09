@@ -510,10 +510,9 @@ class StructureDatasetPDB():
         return self.data[idx]
 
 
-    
 class StructureLoader():
     def __init__(self, dataset, batch_size=100, shuffle=True,
-        collate_fn=lambda x:x, drop_last=False):
+                 collate_fn=lambda x:x, drop_last=False):
         self.dataset = dataset
         self.size = len(dataset)
         self.lengths = [len(dataset[i]['seq']) for i in range(self.size)]
@@ -543,15 +542,15 @@ class StructureLoader():
         for b_idx in self.clusters:
             batch = [self.dataset[i] for i in b_idx]
             yield batch
-            
-            
-            
+
+
 # The following gather functions
 def gather_edges(edges, neighbor_idx):
     # Features [B,N,N,C] at Neighbor indices [B,N,K] => Neighbor features [B,N,K,C]
     neighbors = neighbor_idx.unsqueeze(-1).expand(-1, -1, -1, edges.size(-1))
     edge_features = torch.gather(edges, 2, neighbors)
     return edge_features
+
 
 def gather_nodes(nodes, neighbor_idx):
     # Features [B,N,C] at Neighbor indices [B,N,K] => [B,N,K,C]
@@ -563,11 +562,13 @@ def gather_nodes(nodes, neighbor_idx):
     neighbor_features = neighbor_features.view(list(neighbor_idx.shape)[:3] + [-1])
     return neighbor_features
 
+
 def gather_nodes_t(nodes, neighbor_idx):
     # Features [B,N,C] at Neighbor index [B,K] => Neighbor features[B,K,C]
     idx_flat = neighbor_idx.unsqueeze(-1).expand(-1, -1, nodes.size(2))
     neighbor_features = torch.gather(nodes, 1, idx_flat)
     return neighbor_features
+
 
 def cat_neighbors_nodes(h_nodes, h_neighbors, E_idx):
     h_nodes = gather_nodes(h_nodes, E_idx)
@@ -689,9 +690,10 @@ class PositionalEncodings(nn.Module):
         E = self.linear(d_onehot.float())
         return E
 
+
 class ProteinFeatures(nn.Module):
     def __init__(self, edge_features, node_features, num_positional_embeddings=16,
-        num_rbf=16, top_k=30, augment_eps=0., num_chain_embeddings=16):
+                 num_rbf=16, top_k=30, augment_eps=0., num_chain_embeddings=16):
         """ Extract protein features """
         super(ProteinFeatures, self).__init__()
         self.edge_features = edge_features
@@ -707,8 +709,8 @@ class ProteinFeatures(nn.Module):
         self.norm_edges = nn.LayerNorm(edge_features)
 
     def _dist(self, X, mask, eps=1E-6):
-        mask_2D = torch.unsqueeze(mask,1) * torch.unsqueeze(mask,2)
-        dX = torch.unsqueeze(X,1) - torch.unsqueeze(X,2)
+        mask_2D = torch.unsqueeze(mask, 1) * torch.unsqueeze(mask, 2)
+        dX = torch.unsqueeze(X, 1) - torch.unsqueeze(X, 2)
         D = mask_2D * torch.sqrt(torch.sum(dX**2, 3) + eps)
         D_max, _ = torch.max(D, -1, keepdim=True)
         D_adjust = D + (1. - mask_2D) * D_max
@@ -736,50 +738,50 @@ class ProteinFeatures(nn.Module):
         if self.augment_eps > 0:
             X = X + self.augment_eps * torch.randn_like(X)
         
-        b = X[:,:,1,:] - X[:,:,0,:]
-        c = X[:,:,2,:] - X[:,:,1,:]
+        b = X[:, :, 1, :] - X[:, :, 0, :]
+        c = X[:, :, 2, :] - X[:, :, 1, :]
         a = torch.cross(b, c, dim=-1)
-        Cb = -0.58273431*a + 0.56802827*b - 0.54067466*c + X[:,:,1,:]
-        Ca = X[:,:,1,:]
-        N = X[:,:,0,:]
-        C = X[:,:,2,:]
-        O = X[:,:,3,:]
+        Cb = -0.58273431*a + 0.56802827*b - 0.54067466*c + X[:, :, 1, :]
+        Ca = X[:, :, 1, :]
+        N = X[:, :, 0, :]
+        C = X[:, :, 2, :]
+        O = X[:, :, 3, :]
  
         D_neighbors, E_idx = self._dist(Ca, mask)
 
         RBF_all = []
-        RBF_all.append(self._rbf(D_neighbors)) #Ca-Ca
-        RBF_all.append(self._get_rbf(N, N, E_idx)) #N-N
-        RBF_all.append(self._get_rbf(C, C, E_idx)) #C-C
-        RBF_all.append(self._get_rbf(O, O, E_idx)) #O-O
-        RBF_all.append(self._get_rbf(Cb, Cb, E_idx)) #Cb-Cb
-        RBF_all.append(self._get_rbf(Ca, N, E_idx)) #Ca-N
-        RBF_all.append(self._get_rbf(Ca, C, E_idx)) #Ca-C
-        RBF_all.append(self._get_rbf(Ca, O, E_idx)) #Ca-O
-        RBF_all.append(self._get_rbf(Ca, Cb, E_idx)) #Ca-Cb
-        RBF_all.append(self._get_rbf(N, C, E_idx)) #N-C
-        RBF_all.append(self._get_rbf(N, O, E_idx)) #N-O
-        RBF_all.append(self._get_rbf(N, Cb, E_idx)) #N-Cb
-        RBF_all.append(self._get_rbf(Cb, C, E_idx)) #Cb-C
-        RBF_all.append(self._get_rbf(Cb, O, E_idx)) #Cb-O
-        RBF_all.append(self._get_rbf(O, C, E_idx)) #O-C
-        RBF_all.append(self._get_rbf(N, Ca, E_idx)) #N-Ca
-        RBF_all.append(self._get_rbf(C, Ca, E_idx)) #C-Ca
-        RBF_all.append(self._get_rbf(O, Ca, E_idx)) #O-Ca
-        RBF_all.append(self._get_rbf(Cb, Ca, E_idx)) #Cb-Ca
-        RBF_all.append(self._get_rbf(C, N, E_idx)) #C-N
-        RBF_all.append(self._get_rbf(O, N, E_idx)) #O-N
-        RBF_all.append(self._get_rbf(Cb, N, E_idx)) #Cb-N
-        RBF_all.append(self._get_rbf(C, Cb, E_idx)) #C-Cb
-        RBF_all.append(self._get_rbf(O, Cb, E_idx)) #O-Cb
-        RBF_all.append(self._get_rbf(C, O, E_idx)) #C-O
+        RBF_all.append(self._rbf(D_neighbors))  # Ca-Ca
+        RBF_all.append(self._get_rbf(N, N, E_idx))  # N-N
+        RBF_all.append(self._get_rbf(C, C, E_idx))  # C-C
+        RBF_all.append(self._get_rbf(O, O, E_idx))  # O-O
+        RBF_all.append(self._get_rbf(Cb, Cb, E_idx))  # Cb-Cb
+        RBF_all.append(self._get_rbf(Ca, N, E_idx))  # Ca-N
+        RBF_all.append(self._get_rbf(Ca, C, E_idx))  # Ca-C
+        RBF_all.append(self._get_rbf(Ca, O, E_idx))  # Ca-O
+        RBF_all.append(self._get_rbf(Ca, Cb, E_idx))  # Ca-Cb
+        RBF_all.append(self._get_rbf(N, C, E_idx))  # N-C
+        RBF_all.append(self._get_rbf(N, O, E_idx))  # N-O
+        RBF_all.append(self._get_rbf(N, Cb, E_idx))  # N-Cb
+        RBF_all.append(self._get_rbf(Cb, C, E_idx))  # Cb-C
+        RBF_all.append(self._get_rbf(Cb, O, E_idx))  # Cb-O
+        RBF_all.append(self._get_rbf(O, C, E_idx))  # O-C
+        RBF_all.append(self._get_rbf(N, Ca, E_idx))  # N-Ca
+        RBF_all.append(self._get_rbf(C, Ca, E_idx))  # C-Ca
+        RBF_all.append(self._get_rbf(O, Ca, E_idx))  # O-Ca
+        RBF_all.append(self._get_rbf(Cb, Ca, E_idx))  # Cb-Ca
+        RBF_all.append(self._get_rbf(C, N, E_idx))  # C-N
+        RBF_all.append(self._get_rbf(O, N, E_idx))  # O-N
+        RBF_all.append(self._get_rbf(Cb, N, E_idx))  # Cb-N
+        RBF_all.append(self._get_rbf(C, Cb, E_idx))  # C-Cb
+        RBF_all.append(self._get_rbf(O, Cb, E_idx))  # O-Cb
+        RBF_all.append(self._get_rbf(C, O, E_idx))  # C-O
         RBF_all = torch.cat(tuple(RBF_all), dim=-1)
 
-        offset = residue_idx[:,:,None]-residue_idx[:,None,:]
-        offset = gather_edges(offset[:,:,:,None], E_idx)[:,:,:,0] #[B, L, K]
+        offset = residue_idx[:, :, None]-residue_idx[:, None, :]
+        offset = gather_edges(offset[:, :, :, None], E_idx)[:, :, :, 0]  # [B, L, K]
 
-        d_chains = ((chain_labels[:, :, None] - chain_labels[:,None,:])==0).long() #find self vs non-self interaction
-        E_chains = gather_edges(d_chains[:,:,:,None], E_idx)[:,:,:,0]
+        d_chains = ((chain_labels[:, :, None] - chain_labels[:, None, :]) == 0).long() # find self vs non-self interaction
+        E_chains = gather_edges(d_chains[:, :, :, None], E_idx)[:, :, :, 0]
         E_positional = self.embeddings(offset.long(), E_chains)
         E = torch.cat((E_positional, RBF_all), -1)
         E = self.edge_embedding(E)
@@ -787,11 +789,10 @@ class ProteinFeatures(nn.Module):
         return E, E_idx 
 
 
-
 class ProteinMPNN(nn.Module):
     def __init__(self, num_letters, node_features, edge_features,
-        hidden_dim, num_encoder_layers=3, num_decoder_layers=3,
-        vocab=21, k_neighbors=64, augment_eps=0.05, dropout=0.1):
+                 hidden_dim, num_encoder_layers=3, num_decoder_layers=3,
+                 vocab=21, k_neighbors=64, augment_eps=0.05, dropout=0.1):
         super(ProteinMPNN, self).__init__()
 
         # Hyperparameters
@@ -867,9 +868,10 @@ class ProteinMPNN(nn.Module):
         log_probs = F.log_softmax(logits, dim=-1)
         return log_probs
 
-
-
-    def sample(self, X, randn, S_true, chain_mask, chain_encoding_all, residue_idx, mask=None, temperature=1.0, omit_AAs_np=None, bias_AAs_np=None, chain_M_pos=None, omit_AA_mask=None, pssm_coef=None, pssm_bias=None, pssm_multi=None, pssm_log_odds_flag=None, pssm_log_odds_mask=None, pssm_bias_flag=None, bias_by_res=None):
+    def sample(self, X, randn, S_true, chain_mask, chain_encoding_all, residue_idx, mask,
+               temperature=1.0, omit_AAs_np=None, bias_AAs_np=None, chain_M_pos=None, omit_AA_mask=None,
+               pssm_coef=None, pssm_bias=None, pssm_multi=None,
+               pssm_log_odds_flag=None, pssm_log_odds_mask=None, pssm_bias_flag=None, bias_by_res=None, **kwargs):
         device = X.device
         # Prepare node and edge embeddings
         E, E_idx = self.features(X, mask, residue_idx, chain_encoding_all)
@@ -909,7 +911,7 @@ class ProteinMPNN(nn.Module):
         h_EXV_encoder = cat_neighbors_nodes(h_V, h_EX_encoder, E_idx)
         h_EXV_encoder_fw = mask_fw * h_EXV_encoder
         for t_ in range(N_nodes):
-            t = decoding_order[:,t_] #[B]
+            t = decoding_order[:, t_] #[B]
             chain_mask_gathered = torch.gather(chain_mask, 1, t[:,None]) #[B]
             bias_by_res_gathered = torch.gather(bias_by_res, 1, t[:,None,None].repeat(1,1,21))[:,0,:] #[B, 21]
             if (chain_mask_gathered==0).all():
@@ -954,8 +956,27 @@ class ProteinMPNN(nn.Module):
         output_dict = {"S": S, "probs": all_probs, "decoding_order": decoding_order}
         return output_dict
 
-
-    def tied_sample(self, X, randn, S_true, chain_mask, chain_encoding_all, residue_idx, mask=None, temperature=1.0, omit_AAs_np=None, bias_AAs_np=None, chain_M_pos=None, omit_AA_mask=None, pssm_coef=None, pssm_bias=None, pssm_multi=None, pssm_log_odds_flag=None, pssm_log_odds_mask=None, pssm_bias_flag=None, tied_pos=None, tied_beta=None, bias_by_res=None):
+    def tied_sample(self, X: torch.Tensor, randn: torch.Tensor, S_true: torch.Tensor, chain_mask: torch.Tensor,
+                    chain_encoding_all: torch.Tensor, residue_idx: torch.Tensor, mask: torch.Tensor,
+                    temperature=1.0, omit_aas: np.ndarray = None, bias_aas: np.ndarray = None,
+                    chain_M_pos=None, omit_aa_mask=None,
+                    pssm_coef: torch.Tensor = None, pssm_bias: torch.Tensor = None, pssm_multi: float = 0.,
+                    pssm_log_odds_flag: bool = False, pssm_log_odds_mask: torch.Tensor = None,
+                    pssm_bias_flag: bool = False,
+                    bias_by_res: torch.Tensor = None, tied_pos: list[list] = None, tied_beta: torch.Tensor = None,
+                    **kwargs):
+        # Todo allow these to have missing types
+        #  bias_by_res,
+        #  chain_M_pos: torch.Tensor | int = 1
+        if pssm_bias_flag:
+            if pssm_coef is None or pssm_bias is None:
+                raise ValueError("Can't use pssm_bias_flag without providing pssm_coef or pssm_bias. These should be "
+                                 "type torch.Tensor with shape (batch, sequence_length) and "
+                                 "(batch, sequence_length, alphabet) respectively")
+        if pssm_log_odds_flag:
+            if pssm_log_odds_mask is None:
+                raise ValueError("Can't use pssm_log_odds_flag without providing pssm_log_odds_mask. This should be "
+                                 "type torch.Tensor with shape (batch, sequence_length, alphabet)")
         device = X.device
         # Prepare node and edge embeddings
         E, E_idx = self.features(X, mask, residue_idx, chain_encoding_all)
@@ -968,11 +989,12 @@ class ProteinMPNN(nn.Module):
             h_V, h_E = layer(h_V, h_E, E_idx, mask, mask_attend)
 
         # Decoder uses masked self-attention
-        chain_mask = chain_mask*chain_M_pos*mask #update chain_M to include missing regions
-        decoding_order = torch.argsort((chain_mask+0.0001)*(torch.abs(randn))) #[numbers will be smaller for places where chain_M = 0.0 and higher for places where chain_M = 1.0]
+        chain_mask = chain_mask*chain_M_pos*mask  # update chain_M to include missing regions
+        decoding_order = torch.argsort((chain_mask+0.0001)*(torch.abs(randn)))
+        # numbers are smaller for places where chain_mask = 0.0 and higher for places where chain_mask = 1.0
 
-        new_decoding_order = []
-        for t_dec in list(decoding_order[0,].cpu().data.numpy()):
+        new_decoding_order: list[list[int]] = []
+        for t_dec in list(decoding_order[0, ].cpu().data.numpy()):
             if t_dec not in list(itertools.chain(*new_decoding_order)):
                 list_a = [item for item in tied_pos if t_dec in item]
                 if list_a:
@@ -983,7 +1005,10 @@ class ProteinMPNN(nn.Module):
 
         mask_size = E_idx.shape[1]
         permutation_matrix_reverse = torch.nn.functional.one_hot(decoding_order, num_classes=mask_size).float()
-        order_mask_backward = torch.einsum('ij, biq, bjp->bqp',(1-torch.triu(torch.ones(mask_size,mask_size, device=device))), permutation_matrix_reverse, permutation_matrix_reverse)
+        order_mask_backward = torch.einsum('ij, biq, bjp->bqp',
+                                           (1-torch.triu(torch.ones(mask_size, mask_size, device=device))),
+                                           permutation_matrix_reverse,
+                                           permutation_matrix_reverse)
         mask_attend = torch.gather(order_mask_backward, 2, E_idx).unsqueeze(-1)
         mask_1D = mask.view([mask.size(0), mask.size(1), 1, 1])
         mask_bw = mask_1D * mask_attend
@@ -995,9 +1020,8 @@ class ProteinMPNN(nn.Module):
         h_S = torch.zeros_like(h_V, device=device)
         S = torch.zeros((N_batch, N_nodes), dtype=torch.int64, device=device)
         h_V_stack = [h_V] + [torch.zeros_like(h_V, device=device) for _ in range(len(self.decoder_layers))]
-        constant = torch.tensor(omit_AAs_np, device=device)
-        constant_bias = torch.tensor(bias_AAs_np, device=device)
-        omit_AA_mask_flag = omit_AA_mask != None
+        constant = torch.tensor(omit_aas, device=device)
+        constant_bias = torch.tensor(bias_aas, device=device)
 
         h_EX_encoder = cat_neighbors_nodes(torch.zeros_like(h_S), h_E, E_idx)
         h_EXV_encoder = cat_neighbors_nodes(h_V, h_EX_encoder, E_idx)
@@ -1007,53 +1031,52 @@ class ProteinMPNN(nn.Module):
             logit_list = []
             done_flag = False
             for t in t_list:
-                if (chain_mask[:,t]==0).all():
-                    S_t = S_true[:,t]
+                if (chain_mask[:, t] == 0).all():
+                    S_t = S_true[:, t]
                     for t in t_list:
-                        h_S[:,t,:] = self.W_s(S_t)
-                        S[:,t] = S_t
+                        h_S[:, t, :] = self.W_s(S_t)
+                        S[:, t] = S_t
                     done_flag = True
                     break
                 else:
-                    E_idx_t = E_idx[:,t:t+1,:]
-                    h_E_t = h_E[:,t:t+1,:,:]
+                    E_idx_t = E_idx[:, t:t+1, :]
+                    h_E_t = h_E[:, t:t+1, :, :]
                     h_ES_t = cat_neighbors_nodes(h_S, h_E_t, E_idx_t)
-                    h_EXV_encoder_t = h_EXV_encoder_fw[:,t:t+1,:,:]
-                    mask_t = mask[:,t:t+1]
+                    h_EXV_encoder_t = h_EXV_encoder_fw[:, t:t+1, :, :]
+                    mask_t = mask[:, t:t+1]
                     for l, layer in enumerate(self.decoder_layers):
                         h_ESV_decoder_t = cat_neighbors_nodes(h_V_stack[l], h_ES_t, E_idx_t)
-                        h_V_t = h_V_stack[l][:,t:t+1,:]
-                        h_ESV_t = mask_bw[:,t:t+1,:,:] * h_ESV_decoder_t + h_EXV_encoder_t
-                        h_V_stack[l+1][:,t,:] = layer(h_V_t, h_ESV_t, mask_V=mask_t).squeeze(1)
-                    h_V_t = h_V_stack[-1][:,t,:]
+                        h_V_t = h_V_stack[l][:, t:t+1, :]
+                        h_ESV_t = mask_bw[:, t:t+1, :, :] * h_ESV_decoder_t + h_EXV_encoder_t
+                        h_V_stack[l+1][:, t, :] = layer(h_V_t, h_ESV_t, mask_V=mask_t).squeeze(1)
+                    h_V_t = h_V_stack[-1][:, t, :]
                     logit_list.append((self.W_out(h_V_t) / temperature)/len(t_list))
                     logits += tied_beta[t]*(self.W_out(h_V_t) / temperature)/len(t_list)
             if done_flag:
                 pass
             else:
-                bias_by_res_gathered = bias_by_res[:,t,:] #[B, 21]
-                probs = F.softmax(logits-constant[None,:]*1e8+constant_bias[None,:]/temperature+bias_by_res_gathered/temperature, dim=-1)
+                bias_by_res_gathered = bias_by_res[:, t, :]  # [B, 21]
+                probs = F.softmax(logits - constant[None, :]*1e8 + constant_bias[None, :]/temperature+bias_by_res_gathered/temperature, dim=-1)
                 if pssm_bias_flag:
-                    pssm_coef_gathered = pssm_coef[:,t]
-                    pssm_bias_gathered = pssm_bias[:,t]
-                    probs = (1-pssm_multi*pssm_coef_gathered[:,None])*probs + pssm_multi*pssm_coef_gathered[:,None]*pssm_bias_gathered
+                    pssm_coef_gathered = pssm_coef[:, t]
+                    pssm_bias_gathered = pssm_bias[:, t]
+                    probs = (1 - pssm_multi*pssm_coef_gathered[:, None]) * probs + pssm_multi*pssm_coef_gathered[:, None]*pssm_bias_gathered
                 if pssm_log_odds_flag:
-                    pssm_log_odds_mask_gathered = pssm_log_odds_mask[:,t]
+                    pssm_log_odds_mask_gathered = pssm_log_odds_mask[:, t]
                     probs_masked = probs*pssm_log_odds_mask_gathered
                     probs_masked += probs * 0.001
-                    probs = probs_masked/torch.sum(probs_masked, dim=-1, keepdim=True) #[B, 21]
-                if omit_AA_mask_flag:
-                    omit_AA_mask_gathered = omit_AA_mask[:,t]
+                    probs = probs_masked/torch.sum(probs_masked, dim=-1, keepdim=True)  # [B, 21]
+                if omit_aa_mask is not None:
+                    omit_AA_mask_gathered = omit_aa_mask[:, t]
                     probs_masked = probs*(1.0-omit_AA_mask_gathered)
-                    probs = probs_masked/torch.sum(probs_masked, dim=-1, keepdim=True) #[B, 21]
+                    probs = probs_masked/torch.sum(probs_masked, dim=-1, keepdim=True)  # [B, 21]
                 S_t_repeat = torch.multinomial(probs, 1).squeeze(-1)
                 for t in t_list:
-                    h_S[:,t,:] = self.W_s(S_t_repeat)
-                    S[:,t] = S_t_repeat
-                    all_probs[:,t,:] = probs.float()
-        output_dict = {"S": S, "probs": all_probs, "decoding_order": decoding_order}
-        return output_dict
+                    h_S[:, t, :] = self.W_s(S_t_repeat)
+                    S[:, t] = S_t_repeat
+                    all_probs[:, t, :] = probs.float()
 
+        return {'S': S, 'probs': all_probs, 'decoding_order': decoding_order}
 
     def conditional_probs(self, X, S, mask, chain_M, residue_idx, chain_encoding_all, randn, backbone_only=False):
         """ Graph-conditioned sequence model """
