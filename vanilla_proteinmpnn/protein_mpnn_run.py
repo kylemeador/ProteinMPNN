@@ -336,7 +336,8 @@ def main(args):
                 num_seqs = len(temperatures)*NUM_BATCHES*BATCH_COPIES
                 total_length = X.shape[1]
                 print(f'{num_seqs} sequences of length {total_length} generated in {dt} seconds')
-   
+
+
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     
