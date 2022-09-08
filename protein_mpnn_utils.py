@@ -168,13 +168,16 @@ def parse_PDB(path_to_pdb, input_chain_list=None):
     return pdb_dict_list
 
 
-def tied_featurize(batch, device, chain_dict, fixed_position_dict=None, omit_AA_dict=None, tied_positions_dict=None, pssm_dict=None, bias_by_res_dict=None):
+def tied_featurize(batch, device, chain_dict, fixed_position_dict=None, omit_AA_dict=None, tied_positions_dict=None, pssm_dict=None, bias_by_res_dict=None, ca_only=None):
     """ Pack and pad batch into torch tensors """
     alphabet = 'ACDEFGHIKLMNPQRSTVWYX'
     B = len(batch)
     lengths = np.array([len(b['seq']) for b in batch], dtype=np.int32)  # sum of chain seq lengths
     L_max = max([len(b['seq']) for b in batch])
-    X = np.zeros([B, L_max, 4, 3])
+    if ca_only:
+        X = np.zeros([B, L_max, 1, 3])
+    else:
+        X = np.zeros([B, L_max, 4, 3])
     residue_idx = -100*np.ones([B, L_max], dtype=np.int32)
     chain_M = np.zeros([B, L_max], dtype=np.int32)  # 1.0 for the bits that need to be predicted
     pssm_coef_all = np.zeros([B, L_max], dtype=np.float32)  # 1.0 for the bits that need to be predicted
@@ -232,7 +235,14 @@ def tied_featurize(batch, device, chain_dict, fixed_position_dict=None, omit_AA_
                 global_idx_start_list.append(global_idx_start_list[-1]+chain_length)
                 chain_coords = b[f'coords_chain_{letter}']  # this is a dictionary
                 chain_mask = np.zeros(chain_length)  # 0.0 for visible chains
-                x_chain = np.stack([chain_coords[c] for c in [f'N_chain_{letter}', f'CA_chain_{letter}', f'C_chain_{letter}', f'O_chain_{letter}']], 1) #[chain_lenght,4,3]
+                if ca_only:
+                    x_chain = np.array(chain_coords[f'CA_chain_{letter}'])  # [chain_length, 1, 3]  # CA_diff
+                    if len(x_chain.shape) == 2:
+                        x_chain = x_chain[:, None, :]
+                else:
+                    x_chain = np.stack([chain_coords[c] for c in
+                                        [f'N_chain_{letter}', f'CA_chain_{letter}', f'C_chain_{letter}',
+                                         f'O_chain_{letter}']], 1)  # [chain_length, 4, 3]
                 x_chain_list.append(x_chain)
                 chain_mask_list.append(chain_mask)
                 chain_seq_list.append(chain_seq)
@@ -262,7 +272,14 @@ def tied_featurize(batch, device, chain_dict, fixed_position_dict=None, omit_AA_
                 masked_chain_length_list.append(chain_length)
                 chain_coords = b[f'coords_chain_{letter}']  # this is a dictionary
                 chain_mask = np.ones(chain_length)  # 1.0 for masked
-                x_chain = np.stack([chain_coords[c] for c in [f'N_chain_{letter}', f'CA_chain_{letter}', f'C_chain_{letter}', f'O_chain_{letter}']], 1) #[chain_lenght,4,3]
+                if ca_only:
+                    x_chain = np.array(chain_coords[f'CA_chain_{letter}'])  # [chain_length, 1, 3]  # CA_diff
+                    if len(x_chain.shape) == 2:
+                        x_chain = x_chain[:, None, :]
+                else:
+                    x_chain = np.stack([chain_coords[c] for c in
+                                        [f'N_chain_{letter}', f'CA_chain_{letter}', f'C_chain_{letter}',
+                                         f'O_chain_{letter}']], 1)  # [chain_length, 4, 3]
                 x_chain_list.append(x_chain)
                 chain_mask_list.append(chain_mask)
                 chain_seq_list.append(chain_seq)
@@ -393,7 +410,12 @@ def tied_featurize(batch, device, chain_dict, fixed_position_dict=None, omit_AA_
     chain_M_pos = torch.from_numpy(chain_M_pos).to(dtype=torch.float32, device=device)
     omit_AA_mask = torch.from_numpy(omit_AA_mask).to(dtype=torch.float32, device=device)
     chain_encoding_all = torch.from_numpy(chain_encoding_all).to(dtype=torch.long, device=device)
-    return X, S, mask, lengths, chain_M, chain_encoding_all, letter_list_list, visible_list_list, masked_list_list, masked_chain_length_list_list, chain_M_pos, omit_AA_mask, residue_idx, dihedral_mask, tied_pos_list_of_lists_list, pssm_coef_all, pssm_bias_all, pssm_log_odds_all, bias_by_res_all, tied_beta
+    if ca_only:
+        X_out = X[:, :, 0]
+    else:
+        X_out = X
+
+    return X_out, S, mask, lengths, chain_M, chain_encoding_all, letter_list_list, visible_list_list, masked_list_list, masked_chain_length_list_list, chain_M_pos, omit_AA_mask, residue_idx, dihedral_mask, tied_pos_list_of_lists_list, pssm_coef_all, pssm_bias_all, pssm_log_odds_all, bias_by_res_all, tied_beta
 
 
 def loss_nll(S, log_probs, mask):
