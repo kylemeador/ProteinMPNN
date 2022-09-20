@@ -1037,7 +1037,12 @@ class ProteinMPNN(nn.Module):
                 nn.init.xavier_uniform_(p)
 
     def forward(self, X, S, mask, chain_M, residue_idx, chain_encoding_all, randn, use_input_decoding_order=False, decoding_order=None):
-        """ Graph-conditioned sequence model """
+        """ Graph-conditioned sequence model
+
+        Returns:
+            The log of the probabilities for each "residue" in the input.
+                Has shape (batch_length, number_of_residues, alphabet_length)
+        """
         device = X.device
         # Prepare node and edge embeddings
         E, E_idx = self.features(X, mask, residue_idx, chain_encoding_all)
@@ -1115,13 +1120,22 @@ class ProteinMPNN(nn.Module):
         mask_fw = mask_1D * (1. - mask_attend)
 
         N_batch, N_nodes = X.size(0), X.size(1)
-        log_probs = torch.zeros((N_batch, N_nodes, 21), device=device)
+        # log_probs = torch.zeros((N_batch, N_nodes, 21), device=device)
         all_probs = torch.zeros((N_batch, N_nodes, 21), device=device, dtype=torch.float32)
         h_S = torch.zeros_like(h_V, device=device)
         S = torch.zeros((N_batch, N_nodes), dtype=torch.int64, device=device)
         h_V_stack = [h_V] + [torch.zeros_like(h_V, device=device) for _ in range(len(self.decoder_layers))]
-        constant = torch.tensor(omit_AAs_np, device=device)
-        constant_bias = torch.tensor(bias_AAs_np, device=device)
+        if omit_AAs_np is None:
+            constant = torch.zeros(21, device=device)
+        else:
+            constant = torch.tensor(omit_AAs_np, device=device)
+        if omit_AAs_np is None:
+            constant_bias = torch.zeros(21, device=device)
+        else:
+            constant_bias = torch.tensor(bias_AAs_np, device=device)
+        if bias_by_res is None:
+            null_bias_gathered = torch.zeros((N_batch, 21), device=device)  # [B, 21]
+
         #chain_mask_combined = chain_mask*chain_M_pos 
         omit_AA_mask_flag = omit_AA_mask != None
 
@@ -1132,7 +1146,11 @@ class ProteinMPNN(nn.Module):
             t = decoding_order[:, t_]  # [B]
             chain_mask_gathered = torch.gather(chain_mask, 1, t[:, None])  # [B]
             mask_gathered = torch.gather(mask, 1, t[:, None])  # [B]
-            bias_by_res_gathered = torch.gather(bias_by_res, 1, t[:, None, None].repeat(1, 1, 21))[:, 0, :]  # [B, 21]
+            if bias_by_res is None:
+                bias_by_res_gathered = null_bias_gathered  # [B, 21]
+            else:
+                # bias_by_res_gathered = bias_by_res[:, t, :]  # [B, 21] This is how it is written in tied_sample()
+                bias_by_res_gathered = torch.gather(bias_by_res, 1, t[:, None, None].repeat(1, 1, 21))[:, 0, :]  # [B, 21]
             if (mask_gathered == 0).all():  # for padded or missing regions only
                 S_t = torch.gather(S_true, 1, t[:, None])
             else:
@@ -1151,11 +1169,15 @@ class ProteinMPNN(nn.Module):
                 # Sampling step
                 h_V_t = torch.gather(h_V_stack[-1], 1, t[:, None, None].repeat(1, 1, h_V_stack[-1].shape[-1]))[:, 0]
                 logits = self.W_out(h_V_t) / temperature
-                probs = F.softmax(logits-constant[None, :]*1e8+constant_bias[None, :]/temperature+bias_by_res_gathered/temperature, dim=-1)
+                probs = F.softmax(logits
+                                  - constant[None, :]*1e8
+                                  + constant_bias[None, :]/temperature
+                                  + bias_by_res_gathered/temperature, dim=-1)
                 if pssm_bias_flag:
                     pssm_coef_gathered = torch.gather(pssm_coef, 1, t[:, None])[:, 0]
                     pssm_bias_gathered = torch.gather(pssm_bias, 1, t[:, None, None].repeat(1, 1, pssm_bias.shape[-1]))[:, 0]
-                    probs = (1-pssm_multi*pssm_coef_gathered[:, None])*probs + pssm_multi*pssm_coef_gathered[:, None]*pssm_bias_gathered
+                    multi_times_coeff = pssm_multi * pssm_coef_gathered[:, None]
+                    probs = (1 - multi_times_coeff) * probs + multi_times_coeff * pssm_bias_gathered
                 if pssm_log_odds_flag:
                     pssm_log_odds_mask_gathered = torch.gather(pssm_log_odds_mask, 1, t[:,None, None].repeat(1,1,pssm_log_odds_mask.shape[-1]))[:,0] #[B, 21]
                     probs_masked = probs*pssm_log_odds_mask_gathered
@@ -1183,9 +1205,37 @@ class ProteinMPNN(nn.Module):
                     pssm_log_odds_flag: bool = False, pssm_log_odds_mask: torch.Tensor = None,
                     pssm_bias_flag: bool = False,
                     bias_by_res: torch.Tensor = None, tied_pos: list[list] = None, tied_beta: torch.Tensor = None,
-                    **kwargs):
+                    **kwargs) -> dict[str, torch.Tensor]:
+        """
+
+        Args:
+            X:
+            randn:
+            S_true:
+            chain_mask:
+            chain_encoding_all:
+            residue_idx:
+            mask:
+            temperature:
+            omit_AAs_np:
+            bias_AAs_np:
+            chain_M_pos:
+            omit_AA_mask:
+            pssm_coef:
+            pssm_bias:
+            pssm_multi:
+            pssm_log_odds_flag:
+            pssm_log_odds_mask:
+            pssm_bias_flag:
+            bias_by_res:
+            tied_pos:
+            tied_beta: Whether a tied position should be weighted during the summation.
+                Shape (batch_length, number_of_nodes)
+        Returns:
+            A dictionary with keys 'S', 'probs' and 'decoding_order' describing the sampling outcomes
+        """
+        # Todo make tied_pos a required argument as this is tied_sample
         # Todo allow these to have missing types
-        #  bias_by_res,
         #  chain_M_pos: torch.Tensor | int = 1
         if pssm_bias_flag:
             if pssm_coef is None or pssm_bias is None:
@@ -1216,9 +1266,15 @@ class ProteinMPNN(nn.Module):
         new_decoding_order: list[list[int]] = []
         for t_dec in list(decoding_order[0, ].cpu().data.numpy()):
             if t_dec not in list(itertools.chain(*new_decoding_order)):
-                list_a = [item for item in tied_pos if t_dec in item]
-                if list_a:
-                    new_decoding_order.append(list_a[0])
+                # list_a = [item for item in tied_pos if t_dec in item]
+                # if list_a:
+                #     new_decoding_order.append(list_a[0])
+                # else:
+                #     new_decoding_order.append([t_dec])
+                for item in tied_pos:
+                    if t_dec in item:
+                        new_decoding_order.append(item)
+                        break
                 else:
                     new_decoding_order.append([t_dec])
         decoding_order = torch.tensor(list(itertools.chain(*new_decoding_order)), device=device)[None].repeat(X.shape[0], 1)
@@ -1234,28 +1290,37 @@ class ProteinMPNN(nn.Module):
         mask_fw = mask_1D * (1. - mask_attend)
 
         N_batch, N_nodes = X.size(0), X.size(1)
-        log_probs = torch.zeros((N_batch, N_nodes, 21), device=device)
+        # log_probs = torch.zeros((N_batch, N_nodes, 21), device=device)
         all_probs = torch.zeros((N_batch, N_nodes, 21), device=device, dtype=torch.float32)
         h_S = torch.zeros_like(h_V, device=device)
         S = torch.zeros((N_batch, N_nodes), dtype=torch.int64, device=device)
         h_V_stack = [h_V] + [torch.zeros_like(h_V, device=device) for _ in range(len(self.decoder_layers))]
-        constant = torch.tensor(omit_AAs_np, device=device)
-        constant_bias = torch.tensor(bias_AAs_np, device=device)
+        if omit_AAs_np is None:
+            constant = torch.zeros(21, device=device)
+        else:
+            constant = torch.tensor(omit_AAs_np, device=device)
+        if omit_AAs_np is None:
+            constant_bias = torch.zeros(21, device=device)
+        else:
+            constant_bias = torch.tensor(bias_AAs_np, device=device)
+        if bias_by_res is None:
+            null_bias_gathered = torch.zeros((N_batch, 21), device=device)  # [B, 21]
 
         h_EX_encoder = cat_neighbors_nodes(torch.zeros_like(h_S), h_E, E_idx)
         h_EXV_encoder = cat_neighbors_nodes(h_V, h_EX_encoder, E_idx)
         h_EXV_encoder_fw = mask_fw * h_EXV_encoder
         for t_list in new_decoding_order:
             logits = 0.0
-            logit_list = []
-            done_flag = False
+            # logit_list = []
+            # done_flag = False
+            number_tied_positions = len(t_list)
             for t in t_list:
                 if (mask[:, t] == 0).all():
                     S_t = S_true[:, t]
                     for t in t_list:
                         h_S[:, t, :] = self.W_s(S_t)
                         S[:, t] = S_t
-                    done_flag = True
+                    # done_flag = True
                     break
                 else:
                     E_idx_t = E_idx[:, t:t+1, :]
@@ -1269,17 +1334,24 @@ class ProteinMPNN(nn.Module):
                         h_ESV_t = mask_bw[:, t:t+1, :, :] * h_ESV_decoder_t + h_EXV_encoder_t
                         h_V_stack[l+1][:, t, :] = layer(h_V_t, h_ESV_t, mask_V=mask_t).squeeze(1)
                     h_V_t = h_V_stack[-1][:, t, :]
-                    logit_list.append((self.W_out(h_V_t) / temperature)/len(t_list))
-                    logits += tied_beta[t]*(self.W_out(h_V_t) / temperature)/len(t_list)
-            if done_flag:
-                pass
+                    # logit_list.append((self.W_out(h_V_t) / temperature)/number_tied_positions
+                    logits += tied_beta[t] * (self.W_out(h_V_t)/temperature)/number_tied_positions
+            # if done_flag:
+            #     pass
             else:
-                bias_by_res_gathered = bias_by_res[:, t, :]  # [B, 21]
-                probs = F.softmax(logits-constant[None, :]*1e8+constant_bias[None, :]/temperature+bias_by_res_gathered/temperature, dim=-1)
+                if bias_by_res is None:
+                    bias_by_res_gathered = null_bias_gathered  # [B, 21]
+                else:
+                    bias_by_res_gathered = bias_by_res[:, t, :]  # [B, 21]
+                probs = F.softmax(logits
+                                  - constant[None, :]*1e8
+                                  + constant_bias[None, :]/temperature
+                                  + bias_by_res_gathered/temperature, dim=-1)
                 if pssm_bias_flag:
                     pssm_coef_gathered = pssm_coef[:, t]
                     pssm_bias_gathered = pssm_bias[:, t]
-                    probs = (1-pssm_multi*pssm_coef_gathered[:, None])*probs + pssm_multi*pssm_coef_gathered[:, None]*pssm_bias_gathered
+                    multi_times_coeff = pssm_multi * pssm_coef_gathered[:, None]
+                    probs = (1-multi_times_coeff)*probs + multi_times_coeff*pssm_bias_gathered
                 if pssm_log_odds_flag:
                     pssm_log_odds_mask_gathered = pssm_log_odds_mask[:, t]
                     probs_masked = probs*pssm_log_odds_mask_gathered
