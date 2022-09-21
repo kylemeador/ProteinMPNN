@@ -945,16 +945,15 @@ class ProteinFeatures(nn.Module):
     def forward(self, X, mask, residue_idx, chain_labels):
         if self.augment_eps > 0:
             X = X + self.augment_eps * torch.randn_like(X)
-        
-        b = X[:, :, 1, :] - X[:, :, 0, :]
-        c = X[:, :, 2, :] - X[:, :, 1, :]
-        a = torch.cross(b, c, dim=-1)
-        Cb = -0.58273431*a + 0.56802827*b - 0.54067466*c + X[:, :, 1, :]
+
         Ca = X[:, :, 1, :]
         N = X[:, :, 0, :]
         C = X[:, :, 2, :]
         O = X[:, :, 3, :]
- 
+        b = Ca - N
+        c = C - Ca
+        a = torch.cross(b, c, dim=-1)
+        Cb = -0.58273431*a + 0.56802827*b - 0.54067466*c + Ca
         D_neighbors, E_idx = self._dist(Ca, mask)
 
         RBF_all = []
