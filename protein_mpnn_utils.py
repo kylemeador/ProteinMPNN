@@ -1164,6 +1164,11 @@ class ProteinMPNN(nn.Module):
                     h_ESV_decoder_t = cat_neighbors_nodes(h_V_stack[l], h_ES_t, E_idx_t)
                     h_V_t = torch.gather(h_V_stack[l], 1, t[:, None, None].repeat(1, 1, h_V_stack[l].shape[-1]))
                     h_ESV_t = torch.gather(mask_bw, 1, t[:, None, None, None].repeat(1, 1, mask_bw.shape[-2], mask_bw.shape[-1])) * h_ESV_decoder_t + h_EXV_encoder_t
+                    # # h_ESV_t = mask_bw[:, t:t+1, :, :] * h_ESV_decoder_t + h_EXV_encoder_t
+                    # Todo. Make this like tied_sample which was ^
+                    #  and is now like this v (memory optimization)
+                    #  h_ESV_decoder_t *= mask_bw[:, t:t + 1, :, :]
+                    #  h_ESV_decoder_t += h_EXV_encoder_t
                     h_V_stack[l+1].scatter_(1, t[:, None, None].repeat(1, 1, h_V.shape[-1]), layer(h_V_t, h_ESV_t, mask_V=mask_t))
                 # Sampling step
                 h_V_t = torch.gather(h_V_stack[-1], 1, t[:, None, None].repeat(1, 1, h_V_stack[-1].shape[-1]))[:, 0]
@@ -1327,11 +1332,15 @@ class ProteinMPNN(nn.Module):
                     h_ES_t = cat_neighbors_nodes(h_S, h_E_t, E_idx_t)
                     h_EXV_encoder_t = h_EXV_encoder_fw[:, t:t+1, :, :]
                     mask_t = mask[:, t:t+1]
+                    # Always start decoding with a fresh encoding node head
+                    # then update additional node head copies with to outcome of each layer
                     for l, layer in enumerate(self.decoder_layers):
                         h_ESV_decoder_t = cat_neighbors_nodes(h_V_stack[l], h_ES_t, E_idx_t)
                         h_V_t = h_V_stack[l][:, t:t+1, :]
-                        h_ESV_t = mask_bw[:, t:t+1, :, :] * h_ESV_decoder_t + h_EXV_encoder_t
-                        h_V_stack[l+1][:, t, :] = layer(h_V_t, h_ESV_t, mask_V=mask_t).squeeze(1)
+                        # h_ESV_t = mask_bw[:, t:t+1, :, :] * h_ESV_decoder_t + h_EXV_encoder_t
+                        h_ESV_decoder_t *= mask_bw[:, t:t+1, :, :]
+                        h_ESV_decoder_t += h_EXV_encoder_t
+                        h_V_stack[l+1][:, t, :] = layer(h_V_t, h_ESV_decoder_t, mask_V=mask_t).squeeze(1)
                     h_V_t = h_V_stack[-1][:, t, :]
                     # logit_list.append((self.W_out(h_V_t) / temperature)/number_tied_positions
                     logits += tied_beta[t] * (self.W_out(h_V_t)/temperature)/number_tied_positions
@@ -1371,7 +1380,7 @@ class ProteinMPNN(nn.Module):
         return {'S': S, 'probs': all_probs, 'decoding_order': decoding_order}
 
     def conditional_probs(self, X, S, mask, chain_M, residue_idx, chain_encoding_all, randn, backbone_only=False):
-        """ Graph-conditioned sequence model """
+        """ Graph-conditioned coordinate model probabilities dependent on sequence and decoding """
         device = X.device
         # Prepare node and edge embeddings
         E, E_idx = self.features(X, mask, residue_idx, chain_encoding_all)
@@ -1400,7 +1409,7 @@ class ProteinMPNN(nn.Module):
 
         for idx in idx_to_loop:
             h_V = torch.clone(h_V_enc)
-            order_mask = torch.zeros(chain_M.shape[1], device=device).float()
+            # order_mask = torch.zeros(chain_M.shape[1], device=device).float()
             if backbone_only:
                 order_mask = torch.ones(chain_M.shape[1], device=device).float()
                 order_mask[idx] = 0.
@@ -1433,7 +1442,7 @@ class ProteinMPNN(nn.Module):
         return log_conditional_probs
 
     def unconditional_probs(self, X, mask, residue_idx, chain_encoding_all):
-        """ Graph-conditioned sequence model """
+        """ Graph-conditioned sequence model probabilities independent of decoding and sequence """
         device = X.device
         # Prepare node and edge embeddings
         E, E_idx = self.features(X, mask, residue_idx, chain_encoding_all)
