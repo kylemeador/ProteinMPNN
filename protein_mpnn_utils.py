@@ -1071,7 +1071,7 @@ class ProteinMPNN(nn.Module):
         order_mask_backward = torch.einsum('ij, biq, bjp->bqp',
                                            (1-torch.triu(torch.ones(mask_size, mask_size, device=device))),
                                            permutation_matrix_reverse, permutation_matrix_reverse)
-        mask_attend = torch.gather(order_mask_backward, 2, E_idx).unsqueeze(-1)
+        mask_attend = torch.gather(order_mask_backward, 2, E_idx).unsqueeze(-1)  # [B, L, L]
         mask_1D = mask.view([mask.size(0), mask.size(1), 1, 1])
         mask_bw = mask_1D * mask_attend
         mask_fw = mask_1D * (1.-mask_attend)
@@ -1113,7 +1113,7 @@ class ProteinMPNN(nn.Module):
         order_mask_backward = torch.einsum('ij, biq, bjp->bqp',
                                            (1-torch.triu(torch.ones(mask_size, mask_size, device=device))),
                                            permutation_matrix_reverse, permutation_matrix_reverse)
-        mask_attend = torch.gather(order_mask_backward, 2, E_idx).unsqueeze(-1)
+        mask_attend = torch.gather(order_mask_backward, 2, E_idx).unsqueeze(-1)  # [B, L, L]
         mask_1D = mask.view([mask.size(0), mask.size(1), 1, 1])
         mask_bw = mask_1D * mask_attend
         mask_fw = mask_1D * (1. - mask_attend)
@@ -1288,7 +1288,7 @@ class ProteinMPNN(nn.Module):
         order_mask_backward = torch.einsum('ij, biq, bjp->bqp',
                                            (1-torch.triu(torch.ones(mask_size, mask_size, device=device))),
                                            permutation_matrix_reverse, permutation_matrix_reverse)
-        mask_attend = torch.gather(order_mask_backward, 2, E_idx).unsqueeze(-1)
+        mask_attend = torch.gather(order_mask_backward, 2, E_idx).unsqueeze(-1)  # [B, L, L]
         mask_1D = mask.view([mask.size(0), mask.size(1), 1, 1])
         mask_bw = mask_1D * mask_attend
         mask_fw = mask_1D * (1. - mask_attend)
@@ -1422,7 +1422,7 @@ class ProteinMPNN(nn.Module):
             order_mask_backward = torch.einsum('ij, biq, bjp->bqp',
                                                (1-torch.triu(torch.ones(mask_size, mask_size, device=device))),
                                                permutation_matrix_reverse, permutation_matrix_reverse)
-            mask_attend = torch.gather(order_mask_backward, 2, E_idx).unsqueeze(-1)
+            mask_attend = torch.gather(order_mask_backward, 2, E_idx).unsqueeze(-1)  # [B, L, L]
             mask_1D = mask.view([mask.size(0), mask.size(1), 1, 1])
             mask_bw = mask_1D * mask_attend
             mask_fw = mask_1D * (1. - mask_attend)
@@ -1460,7 +1460,7 @@ class ProteinMPNN(nn.Module):
         h_EXV_encoder = cat_neighbors_nodes(h_V, h_EX_encoder, E_idx)
 
         order_mask_backward = torch.zeros([X.shape[0], X.shape[1], X.shape[1]], device=device)
-        mask_attend = torch.gather(order_mask_backward, 2, E_idx).unsqueeze(-1)
+        mask_attend = torch.gather(order_mask_backward, 2, E_idx).unsqueeze(-1)  # [B, L, L]
         mask_1D = mask.view([mask.size(0), mask.size(1), 1, 1])
         mask_bw = mask_1D * mask_attend
         mask_fw = mask_1D * (1. - mask_attend)
