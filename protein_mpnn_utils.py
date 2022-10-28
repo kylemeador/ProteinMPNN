@@ -1,17 +1,21 @@
 from __future__ import print_function
-import json, time, os, sys, glob
-import shutil
+import copy
+import glob
+import itertools
+import json
+import os
+import random
+import sys
+import time
+from typing import Iterable, Container
+
 import numpy as np
 import torch
 from torch import optim
-from torch.utils.data import DataLoader
-from torch.utils.data.dataset import random_split, Subset
-
-import copy
 import torch.nn as nn
 import torch.nn.functional as F
-import random
-import itertools
+from torch.utils.data import DataLoader
+from torch.utils.data.dataset import random_split, Subset
 
 #A number of functions/classes are adopted from: https://github.com/jingraham/neurips19-graph-protein-design
 
@@ -720,7 +724,7 @@ class PositionalEncodings(nn.Module):
         self.linear = nn.Linear(2*max_relative_feature+1+1, num_embeddings)
 
     def forward(self, offset, mask):
-        d = torch.clip(offset + self.max_relative_feature, 0, 2*self.max_relative_feature)*mask + (1-mask)*(2*self.max_relative_feature+1)
+        d = torch.clip(offset + self.max_relative_feature, 0, 2*self.max_relative_feature)*mask + (1-mask)*(2*self.max_relative_feature + 1)
         d_onehot = torch.nn.functional.one_hot(d, 2*self.max_relative_feature+1+1)
         E = self.linear(d_onehot.float())
         return E
@@ -942,7 +946,19 @@ class ProteinFeatures(nn.Module):
         RBF_A_B = self._rbf(D_A_B_neighbors)
         return RBF_A_B
 
-    def forward(self, X, mask, residue_idx, chain_labels):
+    def forward(self, X: torch.Tensor, mask: torch.Tensor, residue_idx: torch.Tensor, chain_labels: torch.Tensor) \
+            -> tuple[torch.Tensor, torch.Tensor]:
+        """
+
+        Args:
+            X:
+            mask:
+            residue_idx:
+            chain_labels:
+
+        Returns:
+            The edges and the edge indices of the provided coordinates, residue indices, and chain labels
+        """
         if self.augment_eps > 0:
             X = X + self.augment_eps * torch.randn_like(X)
 
@@ -984,12 +1000,13 @@ class ProteinFeatures(nn.Module):
         RBF_all.append(self._get_rbf(C, O, E_idx))  # C-O
         RBF_all = torch.cat(tuple(RBF_all), dim=-1)
 
-        offset = residue_idx[:, :, None]-residue_idx[:, None, :]
+        offset = residue_idx[:, :, None] - residue_idx[:, None, :]
         offset = gather_edges(offset[:, :, :, None], E_idx)[:, :, :, 0]  # [B, L, K]
 
         # Find self vs non-self interaction
         d_chains = ((chain_labels[:, :, None] - chain_labels[:, None, :]) == 0).long()
         E_chains = gather_edges(d_chains[:, :, :, None], E_idx)[:, :, :, 0]
+        # embeddings.forward() returns .float() -> torch.float32
         E_positional = self.embeddings(offset.long(), E_chains)
         E = torch.cat((E_positional, RBF_all), -1)
         E = self.edge_embedding(E)
@@ -1040,7 +1057,7 @@ class ProteinMPNN(nn.Module):
 
         Returns:
             The log of the probabilities for each "residue" in the input.
-                Has shape (batch_length, number_of_residues, alphabet_length)
+                Has shape (batch_length, number_of_residues, alphabet_length), dtype=torch.float32
         """
         device = X.device
         # Prepare node and edge embeddings
@@ -1062,14 +1079,14 @@ class ProteinMPNN(nn.Module):
         h_EX_encoder = cat_neighbors_nodes(torch.zeros_like(h_S), h_E, E_idx)
         h_EXV_encoder = cat_neighbors_nodes(h_V, h_EX_encoder, E_idx)
 
-        chain_M = chain_M*mask  # update chain_M to include missing regions
         if not use_input_decoding_order:
-            # [numbers will be smaller for places where chain_M = 0.0 and higher for places where chain_M = 1.0]
-            decoding_order = torch.argsort((chain_M+0.0001)*(torch.abs(randn)))
+            chain_M *= mask  # update chain_M to include missing regions
+            # numbers are smaller for places where chain_mask = 0.0 and higher for places where chain_mask = 1.0
+            decoding_order = torch.argsort((chain_M+0.0001) * torch.abs(randn))
         mask_size = E_idx.shape[1]
         permutation_matrix_reverse = torch.nn.functional.one_hot(decoding_order, num_classes=mask_size).float()
         order_mask_backward = torch.einsum('ij, biq, bjp->bqp',
-                                           (1-torch.triu(torch.ones(mask_size, mask_size, device=device))),
+                                           1 - torch.triu(torch.ones(mask_size, mask_size, device=device)),
                                            permutation_matrix_reverse, permutation_matrix_reverse)
         mask_attend = torch.gather(order_mask_backward, 2, E_idx).unsqueeze(-1)  # [B, L, L]
         mask_1D = mask.view([mask.size(0), mask.size(1), 1, 1])
@@ -1087,6 +1104,7 @@ class ProteinMPNN(nn.Module):
 
         logits = self.W_out(h_V)
         log_probs = F.log_softmax(logits, dim=-1)
+
         return log_probs
 
     def sample(self, X, randn, S_true, chain_mask, chain_encoding_all, residue_idx, mask=None,
@@ -1106,8 +1124,9 @@ class ProteinMPNN(nn.Module):
             h_V, h_E = layer(h_V, h_E, E_idx, mask, mask_attend)
 
         # Decoder uses masked self-attention
-        chain_mask = chain_mask*chain_M_pos*mask  # update chain_M to include missing regions
-        decoding_order = torch.argsort((chain_mask+0.0001)*(torch.abs(randn)))  # [numbers will be smaller for places where chain_M = 0.0 and higher for places where chain_M = 1.0]
+        chain_mask = chain_mask * chain_M_pos * mask  # update chain_M to include missing regions
+        # numbers are smaller for places where chain_mask = 0.0 and higher for places where chain_mask = 1.0
+        decoding_order = torch.argsort((chain_mask+0.0001) * (torch.abs(randn)))
         mask_size = E_idx.shape[1]
         permutation_matrix_reverse = torch.nn.functional.one_hot(decoding_order, num_classes=mask_size).float()
         order_mask_backward = torch.einsum('ij, biq, bjp->bqp',
@@ -1198,8 +1217,8 @@ class ProteinMPNN(nn.Module):
             temp1 = self.W_s(S_t)
             h_S.scatter_(1, t[:, None, None].repeat(1, 1, temp1.shape[-1]), temp1)
             S.scatter_(1, t[:, None], S_t)
-        output_dict = {"S": S, "probs": all_probs, "decoding_order": decoding_order}
-        return output_dict
+
+        return {'S': S, 'probs': all_probs, 'decoding_order': decoding_order}
 
     def tied_sample(self, X: torch.Tensor, randn: torch.Tensor, S_true: torch.Tensor, chain_mask: torch.Tensor,
                     chain_encoding_all: torch.Tensor, residue_idx: torch.Tensor, mask: torch.Tensor = None,
@@ -1207,8 +1226,8 @@ class ProteinMPNN(nn.Module):
                     chain_M_pos=None, omit_AA_mask=None,
                     pssm_coef: torch.Tensor = None, pssm_bias: torch.Tensor = None, pssm_multi: float = 0.,
                     pssm_log_odds_flag: bool = False, pssm_log_odds_mask: torch.Tensor = None,
-                    pssm_bias_flag: bool = False,
-                    bias_by_res: torch.Tensor = None, tied_pos: list[list] = None, tied_beta: torch.Tensor = None,
+                    pssm_bias_flag: bool = False, bias_by_res: torch.Tensor = None,
+                    tied_pos: Iterable[Container] = None, tied_beta: torch.Tensor = None,
                     **kwargs) -> dict[str, torch.Tensor]:
         """
 
@@ -1263,25 +1282,27 @@ class ProteinMPNN(nn.Module):
             h_V, h_E = layer(h_V, h_E, E_idx, mask, mask_attend)
 
         # Decoder uses masked self-attention
-        chain_mask = chain_mask*chain_M_pos*mask  # update chain_M to include missing regions
-        decoding_order = torch.argsort((chain_mask+0.0001)*(torch.abs(randn)))
+        chain_mask = chain_mask * chain_M_pos * mask  # update chain_M to include missing regions
         # numbers are smaller for places where chain_mask = 0.0 and higher for places where chain_mask = 1.0
+        decoding_order = torch.argsort((chain_mask+0.0001) * (torch.abs(randn)))
 
         new_decoding_order: list[list[int]] = []
-        for t_dec in list(decoding_order[0, ].cpu().data.numpy()):
-            if t_dec not in list(itertools.chain(*new_decoding_order)):
-                # list_a = [item for item in tied_pos if t_dec in item]
-                # if list_a:
-                #     new_decoding_order.append(list_a[0])
-                # else:
-                #     new_decoding_order.append([t_dec])
+        found_decoding_indices = []
+        for t_dec in list(decoding_order[0].cpu().numpy()):
+            if t_dec not in found_decoding_indices:
                 for item in tied_pos:
                     if t_dec in item:
-                        new_decoding_order.append(item)
+                        # new_decoding_order.append(item)
                         break
                 else:
-                    new_decoding_order.append([t_dec])
-        decoding_order = torch.tensor(list(itertools.chain(*new_decoding_order)), device=device)[None].repeat(X.shape[0], 1)
+                    item = [t_dec]
+                    # new_decoding_order.append([t_dec])
+                # Keep list of lists format
+                new_decoding_order.append(item)
+                # Add all found decoding_indices
+                found_decoding_indices.extend(item)
+
+        decoding_order = torch.tensor(found_decoding_indices, device=device)[None].repeat(X.shape[0], 1)
 
         mask_size = E_idx.shape[1]
         permutation_matrix_reverse = torch.nn.functional.one_hot(decoding_order, num_classes=mask_size).float()
@@ -1314,7 +1335,7 @@ class ProteinMPNN(nn.Module):
         h_EXV_encoder = cat_neighbors_nodes(h_V, h_EX_encoder, E_idx)
         h_EXV_encoder_fw = mask_fw * h_EXV_encoder
         for t_list in new_decoding_order:
-            logits = 0.0
+            logits = 0.
             # logit_list = []
             # done_flag = False
             number_tied_positions = len(t_list)
@@ -1332,7 +1353,7 @@ class ProteinMPNN(nn.Module):
                     h_ES_t = cat_neighbors_nodes(h_S, h_E_t, E_idx_t)
                     h_EXV_encoder_t = h_EXV_encoder_fw[:, t:t+1, :, :]
                     mask_t = mask[:, t:t+1]
-                    # Always start decoding with a fresh encoding node head
+                    # Always start decoding with a fresh encoding node head h_V_stack[0]
                     # then update additional node head copies with to outcome of each layer
                     for l, layer in enumerate(self.decoder_layers):
                         h_ESV_decoder_t = cat_neighbors_nodes(h_V_stack[l], h_ES_t, E_idx_t)
@@ -1371,7 +1392,8 @@ class ProteinMPNN(nn.Module):
                     probs = probs_masked/torch.sum(probs_masked, dim=-1, keepdim=True)  # [B, 21]
                 S_t_repeat = torch.multinomial(probs, 1).squeeze(-1)
                 # Hard pick fixed positions
-                S_t_repeat = (chain_mask[:, t]*S_t_repeat + (1-chain_mask[:, t])*S_true[:, t]).long()
+                chain_mask_t = chain_mask[:, t]
+                S_t_repeat = (chain_mask_t*S_t_repeat + (1-chain_mask_t)*S_true[:, t]).long()
                 for t in t_list:
                     h_S[:, t, :] = self.W_s(S_t_repeat)
                     S[:, t] = S_t_repeat
@@ -1380,7 +1402,22 @@ class ProteinMPNN(nn.Module):
         return {'S': S, 'probs': all_probs, 'decoding_order': decoding_order}
 
     def conditional_probs(self, X, S, mask, chain_M, residue_idx, chain_encoding_all, randn, backbone_only=False):
-        """ Graph-conditioned coordinate model probabilities dependent on sequence and decoding """
+        """Graph-conditioned coordinate model probabilities dependent on sequence and decoding
+
+        Args:
+            X:
+            S:
+            mask:
+            chain_M:
+            residue_idx:
+            chain_encoding_all:
+            randn:
+            backbone_only: Whether to use backbone data only during node updates for each designable position
+                Same as unconditional_probs, but much slower!
+
+        Returns:
+
+        """
         device = X.device
         # Prepare node and edge embeddings
         E, E_idx = self.features(X, mask, residue_idx, chain_encoding_all)
@@ -1389,7 +1426,7 @@ class ProteinMPNN(nn.Module):
 
         # Encoder is unmasked self-attention
         mask_attend = gather_nodes(mask.unsqueeze(-1),  E_idx).squeeze(-1)
-        mask_attend = mask.unsqueeze(-1) * mask_attend
+        mask_attend *= mask.unsqueeze(-1)
         for layer in self.encoder_layers:
             h_V_enc, h_E = layer(h_V_enc, h_E, E_idx, mask, mask_attend)
 
@@ -1401,13 +1438,13 @@ class ProteinMPNN(nn.Module):
         h_EX_encoder = cat_neighbors_nodes(torch.zeros_like(h_S), h_E, E_idx)
         h_EXV_encoder = cat_neighbors_nodes(h_V_enc, h_EX_encoder, E_idx)
 
-        chain_M = chain_M*mask  # update chain_M to include missing regions
+        chain_M *= mask  # update chain_M to include missing regions
   
         chain_M_np = chain_M.cpu().numpy()
         idx_to_loop = np.argwhere(chain_M_np[0, :] == 1)[:, 0]
         log_conditional_probs = torch.zeros([X.shape[0], chain_M.shape[1], 21], device=device).float()
 
-        for idx in idx_to_loop:
+        for idx in idx_to_loop.tolist():
             h_V = torch.clone(h_V_enc)
             # order_mask = torch.zeros(chain_M.shape[1], device=device).float()
             if backbone_only:
@@ -1416,16 +1453,17 @@ class ProteinMPNN(nn.Module):
             else:
                 order_mask = torch.zeros(chain_M.shape[1], device=device).float()
                 order_mask[idx] = 1.
-            decoding_order = torch.argsort((order_mask[None]+0.0001)*(torch.abs(randn)))  # [numbers will be smaller for places where chain_M = 0.0 and higher for places where chain_M = 1.0]
+            # numbers are smaller for places where chain_mask = 0.0 and higher for places where chain_mask = 1.0
+            decoding_order = torch.argsort((order_mask[None]+0.0001) * (torch.abs(randn)))
             mask_size = E_idx.shape[1]
             permutation_matrix_reverse = torch.nn.functional.one_hot(decoding_order, num_classes=mask_size).float()
             order_mask_backward = torch.einsum('ij, biq, bjp->bqp',
-                                               (1-torch.triu(torch.ones(mask_size, mask_size, device=device))),
+                                               1 - torch.triu(torch.ones(mask_size, mask_size, device=device)),
                                                permutation_matrix_reverse, permutation_matrix_reverse)
             mask_attend = torch.gather(order_mask_backward, 2, E_idx).unsqueeze(-1)  # [B, L, L]
             mask_1D = mask.view([mask.size(0), mask.size(1), 1, 1])
             mask_bw = mask_1D * mask_attend
-            mask_fw = mask_1D * (1. - mask_attend)
+            mask_fw = mask_1D * (1.-mask_attend)
 
             h_EXV_encoder_fw = mask_fw * h_EXV_encoder
             for layer in self.decoder_layers:
@@ -1439,6 +1477,7 @@ class ProteinMPNN(nn.Module):
             logits = self.W_out(h_V)
             log_probs = F.log_softmax(logits, dim=-1)
             log_conditional_probs[:, idx, :] = log_probs[:, idx, :]
+
         return log_conditional_probs
 
     def unconditional_probs(self, X, mask, residue_idx, chain_encoding_all):
@@ -1462,8 +1501,8 @@ class ProteinMPNN(nn.Module):
         order_mask_backward = torch.zeros([X.shape[0], X.shape[1], X.shape[1]], device=device)
         mask_attend = torch.gather(order_mask_backward, 2, E_idx).unsqueeze(-1)  # [B, L, L]
         mask_1D = mask.view([mask.size(0), mask.size(1), 1, 1])
-        mask_bw = mask_1D * mask_attend
-        mask_fw = mask_1D * (1. - mask_attend)
+        # mask_bw = mask_1D * mask_attend
+        mask_fw = mask_1D * (1.-mask_attend)
 
         h_EXV_encoder_fw = mask_fw * h_EXV_encoder
         for layer in self.decoder_layers:
@@ -1471,4 +1510,5 @@ class ProteinMPNN(nn.Module):
 
         logits = self.W_out(h_V)
         log_probs = F.log_softmax(logits, dim=-1)
+
         return log_probs
