@@ -3,8 +3,9 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
-package-mode = false
+package-mode = true
 name = "ProteinMPNN"
+version = "24.0.0"
 author = "Justas Dauparas <>"
 readme = 'README.md'
 license = 'LICENSE'
