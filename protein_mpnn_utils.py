@@ -1074,12 +1074,13 @@ class ProteinMPNN(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, X, S, mask, chain_M, residue_idx, chain_encoding_all, randn, use_input_decoding_order=False, decoding_order=None):
+    def forward(self, X, S, mask, chain_M, residue_idx, chain_encoding_all, randn, use_input_decoding_order=False,
+                decoding_order=None) -> torch.Tensor:
         """ Graph-conditioned sequence model
 
         Returns:
             The log of the probabilities for each "residue" in the input.
-                Has shape (batch_length, number_of_residues, alphabet_length), dtype=torch.float32
+                Has shape (batch length, sequence length, alphabet length), dtype=torch.float32
         """
         device = X.device
         # Prepare node and edge embeddings
@@ -1133,6 +1134,34 @@ class ProteinMPNN(nn.Module):
                temperature=1.0, omit_AAs_np=None, bias_AAs_np=None, chain_M_pos=None, omit_AA_mask=None,
                pssm_coef=None, pssm_bias=None, pssm_multi=None,
                pssm_log_odds_flag=None, pssm_log_odds_mask=None, pssm_bias_flag=None, bias_by_res=None, **kwargs):
+        """
+
+        Args:
+            X:
+            randn:
+            S_true:
+            chain_mask:
+            chain_encoding_all:
+            residue_idx:
+            mask:
+            temperature:
+            omit_AAs_np:
+            bias_AAs_np:
+            chain_M_pos:
+            omit_AA_mask:
+            pssm_coef:
+            pssm_bias:
+            pssm_multi:
+            pssm_log_odds_flag:
+            pssm_log_odds_mask:
+            pssm_bias_flag:
+            bias_by_res:
+        Returns:
+            A dictionary with torch.Tensor features
+                'S', the sampled sequence as integers of indexable alphabet values,
+                'probs', the probabilities of each alphabet character at each sequence positions, and
+                'decoding_order', the order in which the sequence positions were decoded
+        """
         device = X.device
         # Prepare node and edge embeddings
         E, E_idx = self.features(X, mask, residue_idx, chain_encoding_all)
@@ -1277,7 +1306,10 @@ class ProteinMPNN(nn.Module):
             tied_beta: Whether a tied position should be weighted during the summation.
                 Shape (batch_length, number_of_nodes)
         Returns:
-            A dictionary with keys 'S', 'probs' and 'decoding_order' describing the sampling outcomes
+            A dictionary with torch.Tensor features
+                'S', the sampled sequence as integers of indexable alphabet values,
+                'probs', the probabilities of each alphabet character at each sequence positions, and
+                'decoding_order', the order in which the sequence positions were decoded
         """
         # Todo make tied_pos a required argument as this is tied_sample
         # Todo allow these to have missing types
@@ -1423,7 +1455,8 @@ class ProteinMPNN(nn.Module):
 
         return {'S': S, 'probs': all_probs, 'decoding_order': decoding_order}
 
-    def conditional_probs(self, X, S, mask, chain_M, residue_idx, chain_encoding_all, randn, backbone_only=False):
+    def conditional_probs(self, X, S, mask, chain_M, residue_idx, chain_encoding_all, randn, backbone_only=False) \
+            -> torch.Tensor:
         """Graph-conditioned coordinate model probabilities dependent on sequence and decoding
 
         Args:
@@ -1438,7 +1471,7 @@ class ProteinMPNN(nn.Module):
                 Same as unconditional_probs, but much slower!
 
         Returns:
-
+            The log probabilities with shape (batch length, sequence length, alphabet length), dtype=torch.float32
         """
         device = X.device
         # Prepare node and edge embeddings
@@ -1502,8 +1535,12 @@ class ProteinMPNN(nn.Module):
 
         return log_conditional_probs
 
-    def unconditional_probs(self, X, mask, residue_idx, chain_encoding_all):
-        """ Graph-conditioned sequence model probabilities independent of decoding and sequence """
+    def unconditional_probs(self, X, mask, residue_idx, chain_encoding_all) -> torch.Tensor:
+        """ Graph-conditioned sequence model probabilities independent of decoding and sequence
+
+        Returns:
+            The log probabilities with shape (batch length, sequence length, alphabet length), dtype=torch.float32
+        """
         device = X.device
         # Prepare node and edge embeddings
         E, E_idx = self.features(X, mask, residue_idx, chain_encoding_all)
