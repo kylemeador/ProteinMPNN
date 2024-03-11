@@ -1,0 +1,16 @@
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+package-mode = false
+name = "ProteinMPNN"
+author = "Justas Dauparas <>"
+readme = 'README.md'
+license = 'LICENSE'
+
+[tool.poetry.dependencies]
+python = "^3.9"
+pytorch = "*"
+torchvision = "*"
+torchaudio = "*"
