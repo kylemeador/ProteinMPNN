@@ -10,6 +10,7 @@ description = "Fork of code from the paper: Robust deep learning-based protein s
 authors = ["Justas Dauparas <>"]
 readme = 'README.md'
 license = 'LICENSE'
+include=[{include="proteinmpnn"}]
 
 [tool.poetry.dependencies]
 python = "^3.9"
